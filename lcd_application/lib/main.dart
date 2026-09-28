@@ -1,4 +1,16 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:lcd_application/config.dart';
+import 'package:lcd_application/helper.dart';
+import 'package:lcd_application/ble_communication.dart';
+import 'package:lcd_application/pages/text_page.dart';
+import 'package:lcd_application/pages/picture_page.dart';
+import 'package:lcd_application/pages/lcd_simulation.dart';
 
 void main() {
   runApp(const MyApp());
@@ -7,45 +19,20 @@ void main() {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Flutter Demo',
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
+        colorScheme: .fromSeed(seedColor: const Color.fromARGB(255, 1, 78, 34)),
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const MyHomePage(title: 'LCD-Patch'),
     );
   }
 }
 
 class MyHomePage extends StatefulWidget {
   const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
 
   final String title;
 
@@ -54,68 +41,184 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+  BLEConnection ble = BLEConnection();
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
+  DisplayContext currentDisplayContext = DisplayContext.text;
+  DisplayContext getCurrentContext() {
+    return currentDisplayContext;
   }
+
+  TftText enteredText = TftText(
+    text: "",
+    x: LcdSize.width.toInt() ~/ 2,
+    y: LcdSize.height.toInt() ~/ 2 -18,
+    font: 5,
+    color: const Color.fromARGB(255, 0, 0, 0),
+    backgroundColor: const Color.fromARGB(255, 255, 255, 255),
+    align: TextAlign.center,
+  );
+
+  TftPicture? picture;
+
+  late TftDisplay tft;
+  
+  @override
+  void initState() {
+    super.initState();
+
+    tft = TftDisplay(width: LcdSize.width.toInt(), height: LcdSize.height.toInt(), text: enteredText, getCurrentContext: getCurrentContext);
+    ble.init();
+  }
+
+  Future<void> _choosePicture() async {
+    final ImagePicker picker = ImagePicker();
+
+    final XFile? chosenFile = await picker.pickImage(
+      source: ImageSource.gallery,
+    );
+
+    if (chosenFile != null) {
+      ui.Image img = await fileToImage(File(chosenFile.path));
+
+      final imageWidth = img.width.toDouble();
+      final imageHeight = img.height.toDouble();
+      final scale = math.min(
+        LcdSize.width.toInt() / imageWidth,
+        LcdSize.height.toInt() / imageHeight,
+      );
+
+      picture = TftPicture(image: img, x: 0, y: 0, width: (imageWidth * scale).toInt(), height: (imageHeight * scale).toInt(), zoom: 1);
+      _showLCD();
+    }
+  }
+
+  void _showLCD() {
+    switch (currentDisplayContext) {
+      case DisplayContext.text: {
+        tft.drawString(text: enteredText);
+        setState(() {});
+        break;
+      }
+      case DisplayContext.picture: {
+        tft.drawBitmap(picture: picture!);
+        setState(() {});
+        break;
+      }
+    }
+  }
+
+  void _updateMCU() async {
+    switch (currentDisplayContext) {
+      case DisplayContext.text:
+        final String textData = jsonEncode({
+          "text": enteredText.text,
+          "x": 0,
+          "y": enteredText.y,
+          "textSize": enteredText.font,
+          "textColor": colorToRgb565(enteredText.color),
+          "backgroundColor": colorToRgb565(enteredText.backgroundColor!),
+        });
+        ble.sendText(textData);
+        break;
+      case DisplayContext.picture:
+        if (picture == null) {
+          return;
+        }
+        final croppedImage = await cropImage(picture: picture!, dstWidth: LcdSize.width.toInt(), dstHeight: LcdSize.height.toInt());
+        final pixelImage = await imageToPixels(croppedImage);
+        final rgb565Image = await pixelsToRgb565(pixelImage);
+        ble.sendPicture(rgb565Image);
+        break;
+    }
+    
+  }
+
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
         title: Text(widget.title),
       ),
       body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
         child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
+          mainAxisAlignment: .spaceBetween,
           children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+
+            Column(
+              mainAxisAlignment: .start,
+              children: [
+                Container(
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                      color: Theme.of(context).colorScheme.onSurface,
+                      width: 3,
+                    ),
+                  ),
+                  child: CustomPaint(
+                    size: Size(LcdSize.width.toDouble(), LcdSize.height.toDouble()),
+                    painter: TftPainter(tft),
+                  ),
+                ),
+                const SizedBox(height: 10),
+
+                if (currentDisplayContext == DisplayContext.text)
+                  TextPage(
+                    title: "TextPage",
+                    enteredText: enteredText, 
+                    showLCD: _showLCD, 
+                  ),
+                
+                if (currentDisplayContext == DisplayContext.picture) 
+                  PicturePage(
+                    title: "PicturePage",
+                    picture: picture,
+                    showLCD: _showLCD,
+                    choosePicture: _choosePicture,
+                  ),
+
+                const SizedBox(height: 10),
+                
+                ElevatedButton(
+                  onPressed: () {
+                    _updateMCU();
+                  },
+                  child: const Text("Upload"),
+                ),
+              ],
             ),
+
+            Column(
+              mainAxisAlignment: .end,
+              children: [
+                SegmentedButton<String>(
+                segments: [
+                  ButtonSegment(
+                    value: DisplayContext.text.name,
+                    label: Text('Text'),
+                    icon: Icon(Icons.text_fields),
+                  ),
+                  ButtonSegment(
+                    value: DisplayContext.picture.name,
+                    label: Text('Picture'),
+                    icon: Icon(Icons.image),
+                  ),
+                ],
+
+                selected: {currentDisplayContext.name},
+
+                onSelectionChanged: (Set<String> newSubPage) {
+                  setState(() {
+                    currentDisplayContext = DisplayContext.values.byName(newSubPage.first);
+                  });
+                },
+              ),
+              ],
+            )
+
           ],
         ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
       ),
     );
   }
