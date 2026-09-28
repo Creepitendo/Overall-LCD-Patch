@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
@@ -78,7 +77,8 @@ class _MyHomePageState extends State<MyHomePage> {
     );
 
     if (chosenFile != null) {
-      ui.Image img = await fileToImage(File(chosenFile.path));
+      final bytes = await chosenFile.readAsBytes();
+      final ui.Image img = await bytesToImage(bytes);
 
       final imageWidth = img.width.toDouble();
       final imageHeight = img.height.toDouble();

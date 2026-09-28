@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:lcd_application/config.dart';
@@ -130,12 +130,9 @@ Future<List<Color>> imageToPixels(ui.Image image) async {
   return pixels;
 }
 
-Future<ui.Image> fileToImage(File file) async {
-  final bytes = await file.readAsBytes();
-
+Future<ui.Image> bytesToImage(Uint8List bytes) async {
   final codec = await ui.instantiateImageCodec(bytes);
   final frame = await codec.getNextFrame();
-
   return frame.image;
 }
 
