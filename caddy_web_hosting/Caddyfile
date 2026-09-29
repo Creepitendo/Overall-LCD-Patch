@@ -1,0 +1,5 @@
+overall.dittmann-ac.de {
+    root * ../lcd_application/build/web
+    try_files {path} /index.html
+    file_server
+}
