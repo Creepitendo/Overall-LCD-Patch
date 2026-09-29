@@ -37,8 +37,7 @@ dependencies:
   image_picker: ^1.2.3
   flutter_colorpicker: ^1.1.0
   flutter_blue_plus: ^2.3.12
-  path_provider: ^2.1.6
-  gal: ^2.3.3
+  flutter_launcher_icons: ^0.14.4
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -52,6 +51,16 @@ dev_dependencies:
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/app_icon.png"
+  web:
+    generate: true
+    image_path: "assets/icon/app_icon.png"
+    background_color: "#ffffff"
+    theme_color: "#ffffff"
 
 # The following section is specific to Flutter packages.
 flutter:

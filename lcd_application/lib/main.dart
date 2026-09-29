@@ -21,7 +21,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      title: 'LCD-Patch',
       theme: ThemeData(
         colorScheme: .fromSeed(seedColor: const Color.fromARGB(255, 1, 78, 34)),
       ),
@@ -41,6 +41,10 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   BLEConnection ble = BLEConnection();
+
+  bool isAdmin = false;
+  final passwordController = TextEditingController();
+  bool useServer = false;
 
   DisplayContext currentDisplayContext = DisplayContext.text;
   DisplayContext getCurrentContext() {
@@ -66,7 +70,6 @@ class _MyHomePageState extends State<MyHomePage> {
     super.initState();
 
     tft = TftDisplay(width: LcdSize.width.toInt(), height: LcdSize.height.toInt(), text: enteredText, getCurrentContext: getCurrentContext);
-    ble.init();
   }
 
   Future<void> _choosePicture() async {
@@ -189,34 +192,122 @@ class _MyHomePageState extends State<MyHomePage> {
               ],
             ),
 
-            Column(
-              mainAxisAlignment: .end,
+            Stack(
+              alignment: Alignment.center,
               children: [
+                // Menü bleibt in der Mitte
                 SegmentedButton<String>(
-                segments: [
-                  ButtonSegment(
-                    value: DisplayContext.text.name,
-                    label: Text('Text'),
-                    icon: Icon(Icons.text_fields),
-                  ),
-                  ButtonSegment(
-                    value: DisplayContext.picture.name,
-                    label: Text('Picture'),
-                    icon: Icon(Icons.image),
-                  ),
-                ],
+                  segments: [
+                    ButtonSegment(
+                      value: DisplayContext.text.name,
+                      label: const Text('Text'),
+                      icon: const Icon(Icons.text_fields),
+                    ),
+                    ButtonSegment(
+                      value: DisplayContext.picture.name,
+                      label: const Text('Picture'),
+                      icon: const Icon(Icons.image),
+                    ),
+                  ],
+                  selected: {currentDisplayContext.name},
+                  onSelectionChanged: (Set<String> newSubPage) {
+                    setState(() {
+                      currentDisplayContext =
+                          DisplayContext.values.byName(newSubPage.first);
+                    });
+                  },
+                ),
 
-                selected: {currentDisplayContext.name},
+                Align(
+                  alignment: Alignment.bottomRight,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.start,
+                    children: [
+                      if (isAdmin)
+                      ValueListenableBuilder<bool>(
+                        valueListenable: ble.isConnected,
+                        builder: (context, connected, child) {
+                          return IconButton(
+                            icon: const Icon(Icons.bluetooth),
+                            color: connected ? Colors.green : Colors.red,
+                            tooltip: 'Bluetooth',
+                            onPressed: () {
+                              if (!connected) {
+                                ble.init();
+                              }
+                            },
+                          );
+                        },
+                      ),
 
-                onSelectionChanged: (Set<String> newSubPage) {
-                  setState(() {
-                    currentDisplayContext = DisplayContext.values.byName(newSubPage.first);
-                  });
-                },
-              ),
+                      if (isAdmin)
+                      IconButton(
+                        icon: const Icon(Icons.wifi),
+                        color: useServer ? Colors.green : const ui.Color.fromARGB(255, 28, 29, 29),
+                        tooltip: 'Server-Connection',
+                        onPressed: () {
+                          setState(() {
+                            if (useServer) {
+                              useServer = false;
+                            } else {
+                              useServer = true;
+                            }
+                          }); 
+                        }
+                      )
+                    ],
+                  )
+                ),
+
+                Align(
+                  alignment: Alignment.bottomRight,
+                  child: IconButton(
+                      tooltip: 'Admin',
+                      icon: const Icon(Icons.admin_panel_settings),
+                      color: isAdmin ? Colors.green : const ui.Color.fromARGB(255, 28, 29, 29),
+                      onPressed: () {
+                        showDialog(
+                          context: context,
+                          builder: (context) {
+                            return AlertDialog(
+                              title: const Text('Admin Login'),
+                              content: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  TextField(
+                                    controller: passwordController,
+                                    obscureText: true,
+                                    decoration: const InputDecoration(
+                                      labelText: 'Password',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context),
+                                  child: const Text('Abbrechen'),
+                                ),
+                                ElevatedButton(
+                                  onPressed: () {
+                                    if (passwordController.text == adminPassword) {
+                                      setState(() {
+                                        isAdmin = true;
+                                      }); 
+                                      Navigator.pop(context);
+                                    }
+                                  },
+                                  child: const Text('Login'),
+                                ),
+                              ],
+                            );
+                          },
+                        );
+                      },
+                    ),
+                ),
               ],
             )
-
           ],
         ),
       ),

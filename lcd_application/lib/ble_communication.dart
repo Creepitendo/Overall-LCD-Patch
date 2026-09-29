@@ -18,7 +18,7 @@ class BLEConnection {
 
   StreamSubscription<BluetoothConnectionState>? _connectionSubscription;
   Timer? _monitorTimer;
-  bool isConnected = false;
+  final ValueNotifier<bool> isConnected = ValueNotifier(false);
 
   Future<void> init() async {
     _scan();
@@ -26,19 +26,21 @@ class BLEConnection {
 
   Future<void> monitorConnection() async {
     if (connectedDevice == null) return;
+    await _connectionSubscription?.cancel();
 
-    _connectionSubscription = connectedDevice!.connectionState.listen((state) {
-      isConnected = state == BluetoothConnectionState.connected;
+    _connectionSubscription =
+        connectedDevice!.connectionState.listen((state) {
+      debugPrint("BLE State: $state");
 
-      if (!isConnected) {
+      final connected =
+          state == BluetoothConnectionState.connected;
+
+      isConnected.value = connected;
+
+      if (!connected) {
         _handleDisconnect();
       }
     });
-
-    _monitorTimer = Timer.periodic(
-      const Duration(seconds: 10),
-      (_) => _healthCheck(),
-    );
   }
 
 
@@ -76,9 +78,12 @@ class BLEConnection {
     try {
       await device.connect(license: License.nonprofit);
       connectedDevice = device;
+      isConnected.value = true;
       await _discoverServices(device);
+      await monitorConnection();
     } catch (e) {
       debugPrint("Verbindung fehlgeschlagen: $e");
+      isConnected.value = false;
     }
   }
 
@@ -102,25 +107,23 @@ class BLEConnection {
     }
   }
 
-  Future<void> _healthCheck() async {
-    if (connectedDevice == null) return;
-
-    final state = await connectedDevice!.connectionState.first;
-
-    if (state != BluetoothConnectionState.connected) {
-      isConnected = false;
-      await _handleDisconnect();
-    }
-  }
-
   Future<void> _handleDisconnect() async {
-    _scan();
-    print('BLE Verbindung verloren');
+    debugPrint('BLE Verbindung verloren');
+    isConnected.value = false;
+
+    await _connectionSubscription?.cancel();
+    _connectionSubscription = null;
+
+    connectedDevice = null;
+
+    textCharacteristic = null;
+    pictureStartCharacteristic = null;
+    pictureCharacteristic = null;
   }
 
   void dispose() {
     _connectionSubscription?.cancel();
-    _monitorTimer?.cancel();
+    isConnected.dispose();
   }
 
   Future<void> sendText(String jsonTextData) async {
