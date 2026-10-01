@@ -3,3 +3,7 @@ overall.dittmann-ac.de {
     try_files {path} /index.html
     file_server
 }
+
+request.overall.dittmann-ac.de {
+    reverse_proxy 127.0.0.1:8000
+}
