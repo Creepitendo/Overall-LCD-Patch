@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:lcd_application/config.dart';
 import 'package:lcd_application/helper.dart';
 import 'package:lcd_application/ble_communication.dart';
+import 'package:lcd_application/rest_communication.dart';
 import 'package:lcd_application/pages/text_page.dart';
 import 'package:lcd_application/pages/picture_page.dart';
 import 'package:lcd_application/pages/lcd_simulation.dart';
@@ -41,6 +42,14 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   BLEConnection ble = BLEConnection();
+  RESTService rest = RESTService(requestServerURL);
+
+  Timer? requestServerTimer;
+  int requestServerInterval = 30;
+
+  Timer? uploadBlockingTimer;
+  int uploadBlockingTime = 60;
+  int remainingUploadBlockingTime = 0;
 
   bool isAdmin = false;
   final passwordController = TextEditingController();
@@ -70,6 +79,7 @@ class _MyHomePageState extends State<MyHomePage> {
     super.initState();
 
     tft = TftDisplay(width: LcdSize.width.toInt(), height: LcdSize.height.toInt(), text: enteredText, getCurrentContext: getCurrentContext);
+    startUploadBlockingTimer();
   }
 
   Future<void> _choosePicture() async {
@@ -111,6 +121,17 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void _updateMCU() async {
+    void queueCountMessage(queueCount) { 
+      double waitingTime = (queueCount * requestServerInterval) / 60;
+      String waitingTimeText = waitingTime.toStringAsFixed(1);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("$queueCount Requests in Queue ($waitingTimeText minutes)"),
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    }
+    
     switch (currentDisplayContext) {
       case DisplayContext.text:
         final String textData = jsonEncode({
@@ -121,8 +142,16 @@ class _MyHomePageState extends State<MyHomePage> {
           "textColor": colorToRgb565(enteredText.color),
           "backgroundColor": colorToRgb565(enteredText.backgroundColor!),
         });
-        ble.sendText(textData);
+        
+        if (isAdmin && ble.isConnected.value && !useServer) {
+          ble.sendText(textData);
+        }
+        else {
+          final answer = await rest.uploadText(jsonEncodedTextData: textData);
+          queueCountMessage(answer["queueCount"]);
+        }
         break;
+
       case DisplayContext.picture:
         if (picture == null) {
           return;
@@ -130,11 +159,82 @@ class _MyHomePageState extends State<MyHomePage> {
         final croppedImage = await cropImage(picture: picture!, dstWidth: LcdSize.width.toInt(), dstHeight: LcdSize.height.toInt());
         final pixelImage = await imageToPixels(croppedImage);
         final rgb565Image = await pixelsToRgb565(pixelImage);
-        ble.sendPicture(rgb565Image);
+
+        if (isAdmin && ble.isConnected.value && !useServer) {
+          ble.sendPicture(rgb565Image);
+        }
+        else {
+          final answer = await rest.uploadPicture(picture: rgb565Image);
+          queueCountMessage(answer["queueCount"]);
+        }
         break;
     }
-    
   }
+
+  void startRequestServerTimer(int timerDuration) {
+    requestServerTimer?.cancel();
+
+    requestServerTimer = Timer.periodic(
+      Duration(seconds: timerDuration),
+      (_) async {
+        final data = await rest.getLCDRequest();
+        if (!mounted) return;
+
+        if (data["dataPresent"]) {
+          if (data["type"] == "text") {
+            ble.sendText(jsonEncode(data["data"]));
+          }
+          else if (data["type"] == "picture") {
+            ble.sendPicture(List<int>.from(data["data"]["picture"]));
+          }
+          else {
+            throw Exception(
+              "Request-Server Datatype not valid: ${data["type"]}",
+            );
+          }
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("${data["queueCount"]} Requests in Queue"),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      },
+    );
+  }
+
+  void stopRequestServerTimer() {
+    requestServerTimer?.cancel();
+    requestServerTimer = null;
+  }
+
+  void startUploadBlockingTimer() {
+    uploadBlockingTimer?.cancel();
+
+    setState(() {
+      remainingUploadBlockingTime = uploadBlockingTime;
+    });
+
+    uploadBlockingTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (timer) {
+        if (remainingUploadBlockingTime <= 1) {
+          timer.cancel();
+
+          setState(() {
+            remainingUploadBlockingTime = 0;
+          });
+        } 
+        else {
+          setState(() {
+            remainingUploadBlockingTime--;
+          });
+        }
+      },
+    );
+  }
+    
 
 
   @override
@@ -184,10 +284,15 @@ class _MyHomePageState extends State<MyHomePage> {
                 const SizedBox(height: 10),
                 
                 ElevatedButton(
-                  onPressed: () {
-                    _updateMCU();
-                  },
-                  child: const Text("Upload"),
+                  onPressed: remainingUploadBlockingTime == 0 
+                  ? () {
+                      if (!isAdmin) {
+                        startUploadBlockingTimer();
+                      }
+                      _updateMCU();
+                    }
+                  : null,
+                  child: Text(remainingUploadBlockingTime==0 ? "Upload" : "$remainingUploadBlockingTime seconds"),
                 ),
               ],
             ),
@@ -248,8 +353,11 @@ class _MyHomePageState extends State<MyHomePage> {
                         onPressed: () {
                           setState(() {
                             if (useServer) {
+                              stopRequestServerTimer();
                               useServer = false;
-                            } else {
+                            } 
+                            else {
+                              startRequestServerTimer(requestServerInterval);
                               useServer = true;
                             }
                           }); 
@@ -293,6 +401,7 @@ class _MyHomePageState extends State<MyHomePage> {
                                     if (passwordController.text == adminPassword) {
                                       setState(() {
                                         isAdmin = true;
+                                        remainingUploadBlockingTime = 0;
                                       }); 
                                       Navigator.pop(context);
                                     }

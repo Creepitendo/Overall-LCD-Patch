@@ -1,14 +1,26 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
+from enum import Enum
 import asyncio
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 buffer = asyncio.Queue()
 
+class DataType(Enum):
+    TEXT="text"
+    PICTURE="picture"
+
 class TextData(BaseModel):
-    type: str
     text: str
     x: int
     y: int
@@ -17,35 +29,46 @@ class TextData(BaseModel):
     backgroundColor: int
 
 class PictureData(BaseModel):
-    type: str
     picture: List[int]
 
 
 @app.post("/text")
-async def receive_data(data: TextData):
-    await buffer.put(data.model_dump())
+async def upload_text(data: TextData):
+    queueCount = buffer.qsize()
+    await buffer.put((DataType.TEXT, data.model_dump()))
 
     return {
-        "status": "received",
-        "position": buffer.qsize()
+        "queueCount": queueCount
     }
 
 @app.post("/picture")
-async def receive_data(data: PictureData):
-    await buffer.put(data.model_dump())
-    
+async def upload_picture(data: PictureData):
+    queueCount = buffer.qsize()
+    await buffer.put((DataType.PICTURE, data.model_dump()))
+
     return {
-        "status": "received",
-        "position": buffer.qsize()
+        "queueCount": queueCount
     }
 
-@app.get("/data")
-async def get_data():
-    items = []
-
+@app.get("/lcd_request")
+async def get_lcd_request():
+    dataPresent = True
     if not buffer.empty():
-        items.append(await buffer.get())
+        data = await buffer.get()
+    else:
+        dataPresent = False
 
-    return {
-        "data": items
-    }
+    if dataPresent:
+        return {
+            "type": data[0].value,
+            "dataPresent": dataPresent,
+            "queueCount": buffer.qsize(),
+            "data": data[1],
+        }
+    else:
+        return {
+            "type": "None",
+            "dataPresent": dataPresent,
+            "queueCount": buffer.qsize(),
+            "data": "None",
+        }

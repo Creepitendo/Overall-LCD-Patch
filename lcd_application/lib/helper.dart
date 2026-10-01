@@ -1,7 +1,6 @@
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
-import 'package:lcd_application/config.dart';
 import 'package:lcd_application/pages/lcd_simulation.dart';
 
 enum MoveDirection {
