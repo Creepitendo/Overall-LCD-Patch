@@ -1,8 +1,11 @@
 #include <TFT_eSPI.h>
 #include <ArduinoJson.h>
+#include <cmath>
 #include "utils.h"
 #include "ble_communication.h"  
 #include "config_json.h"
+
+#define CHARACTER_WIDTH 6
 
 #define IDLE_TIME 30000
 #define TEXTBACKGROUND_TIME 30000
@@ -38,6 +41,7 @@ void loop() {
         idleUpdateTime = IDLE_TIME;
         break;
       case DisplayMode::TEXT:
+        tft.fillScreen(BLE_COM::textBackgroundColor);
         textBackgroundUpdateTime = TEXTBACKGROUND_TIME;
         textUpdateTime = TEXT_TIME;
         break;
@@ -63,7 +67,9 @@ void loop() {
     }
 
     case DisplayMode::TEXT: {
-        input = BLE_COM::text + "    ";
+        int blankSpaceCount = std::ceil(320/(CHARACTER_WIDTH*BLE_COM::textSize)) - BLE_COM::text.length();
+        String blankSpaces = String((blankSpaceCount>0 ? std::string(blankSpaceCount, ' ') : "").c_str());
+        input = BLE_COM::text + blankSpaces + "   ";
 
         if (millis() - textBackgroundUpdateTime >= TEXTBACKGROUND_TIME) {
           tft.fillScreen(BLE_COM::textBackgroundColor);
