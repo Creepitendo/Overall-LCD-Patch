@@ -127,6 +127,7 @@ class _MyHomePageState extends State<MyHomePage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text("$queueCount Requests in Queue ($waitingTimeText minutes)"),
+          behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 5),
         ),
       );
@@ -197,6 +198,7 @@ class _MyHomePageState extends State<MyHomePage> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text("${data["queueCount"]} Requests in Queue"),
+            behavior: SnackBarBehavior.floating,
             duration: const Duration(seconds: 2),
           ),
         );
