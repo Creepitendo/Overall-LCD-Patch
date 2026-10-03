@@ -39,6 +39,7 @@ dependencies:
   flutter_blue_plus: ^2.3.12
   flutter_launcher_icons: ^0.14.4
   http: ^1.6.0
+  flutter_foreground_task: ^11.0.3
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -1,18 +1,24 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:lcd_application/config.dart';
 import 'package:lcd_application/helper.dart';
-import 'package:lcd_application/ble_communication.dart';
+import 'package:lcd_application/background_service.dart';
 import 'package:lcd_application/rest_communication.dart';
 import 'package:lcd_application/pages/text_page.dart';
 import 'package:lcd_application/pages/picture_page.dart';
 import 'package:lcd_application/pages/lcd_simulation.dart';
 
 void main() {
+  if (!kIsWeb) {
+    FlutterForegroundTask.initCommunicationPort();
+  }
   runApp(const MyApp());
 }
 
@@ -41,7 +47,6 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  BLEConnection ble = BLEConnection();
   RESTService rest = RESTService(requestServerURL);
 
   Timer? requestServerTimer;
@@ -54,6 +59,9 @@ class _MyHomePageState extends State<MyHomePage> {
   bool isAdmin = false;
   final passwordController = TextEditingController();
   bool useServer = false;
+
+  bool isBackgroundReady = false;
+  bool isBLEConnected = false;
 
   DisplayContext currentDisplayContext = DisplayContext.text;
   DisplayContext getCurrentContext() {
@@ -77,6 +85,12 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void initState() {
     super.initState();
+
+    if (!kIsWeb) {
+      FlutterForegroundTask.addTaskDataCallback(_onBackgroundData);
+      _initForegroundTask();
+      _startBackgroundService();
+    }
 
     tft = TftDisplay(width: LcdSize.width.toInt(), height: LcdSize.height.toInt(), text: enteredText, getCurrentContext: getCurrentContext);
     startUploadBlockingTimer();
@@ -121,18 +135,6 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void _updateMCU() async {
-    void queueCountMessage(queueCount) { 
-      double waitingTime = (queueCount * requestServerInterval) / 60;
-      String waitingTimeText = waitingTime.toStringAsFixed(1);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("$queueCount Requests in Queue ($waitingTimeText minutes)"),
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 5),
-        ),
-      );
-    }
-    
     switch (currentDisplayContext) {
       case DisplayContext.text:
         final String textData = jsonEncode({
@@ -143,13 +145,19 @@ class _MyHomePageState extends State<MyHomePage> {
           "textColor": colorToRgb565(enteredText.color),
           "backgroundColor": colorToRgb565(enteredText.backgroundColor!),
         });
-        
-        if (isAdmin && ble.isConnected.value && !useServer) {
-          ble.sendText(textData);
+
+        if (kIsWeb) {
+          final answer = await rest.uploadText(jsonEncodedTextData: textData,);
+          if (!mounted) return;
+          _uploadNotification(answer["queueCount"]);
         }
         else {
-          final answer = await rest.uploadText(jsonEncodedTextData: textData);
-          queueCountMessage(answer["queueCount"]);
+          if (isBackgroundReady) {
+            FlutterForegroundTask.sendDataToTask({
+              'command': BackgroundCommands.sendText,
+              'data': textData,
+            });
+          }
         }
         break;
 
@@ -161,54 +169,21 @@ class _MyHomePageState extends State<MyHomePage> {
         final pixelImage = await imageToPixels(croppedImage);
         final rgb565Image = await pixelsToRgb565(pixelImage);
 
-        if (isAdmin && ble.isConnected.value && !useServer) {
-          ble.sendPicture(rgb565Image);
+        if (kIsWeb) {
+          final answer = await rest.uploadPicture(picture: rgb565Image,);
+          if (!mounted) return;
+          _uploadNotification(answer["queueCount"]);
         }
         else {
-          final answer = await rest.uploadPicture(picture: rgb565Image);
-          queueCountMessage(answer["queueCount"]);
+          if (isBackgroundReady) {
+            FlutterForegroundTask.sendDataToTask({
+              'command': BackgroundCommands.sendPicture,
+              'data': rgb565Image,
+            });
+          }
         }
         break;
     }
-  }
-
-  void startRequestServerTimer(int timerDuration) {
-    requestServerTimer?.cancel();
-
-    requestServerTimer = Timer.periodic(
-      Duration(seconds: timerDuration),
-      (_) async {
-        final data = await rest.getLCDRequest();
-        if (!mounted) return;
-
-        if (data["dataPresent"]) {
-          if (data["type"] == "text") {
-            ble.sendText(jsonEncode(data["data"]));
-          }
-          else if (data["type"] == "picture") {
-            ble.sendPicture(List<int>.from(data["data"]["picture"]));
-          }
-          else {
-            throw Exception(
-              "Request-Server Datatype not valid: ${data["type"]}",
-            );
-          }
-        }
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("${data["queueCount"]} Requests in Queue"),
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      },
-    );
-  }
-
-  void stopRequestServerTimer() {
-    requestServerTimer?.cancel();
-    requestServerTimer = null;
   }
 
   void startUploadBlockingTimer() {
@@ -237,6 +212,117 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
     
+  void _initForegroundTask() {
+    if (kIsWeb) {
+      return;
+    }
+
+    FlutterForegroundTask.init(
+      androidNotificationOptions: AndroidNotificationOptions(
+        channelId: 'lcd_background',
+        channelName: 'LCD Background Service',
+        channelDescription: 'BLE Connection and Request-Server polling',
+        onlyAlertOnce: true,
+      ),
+
+      iosNotificationOptions: const IOSNotificationOptions(
+        showNotification: false,
+        playSound: false,
+      ),
+
+      foregroundTaskOptions: ForegroundTaskOptions(
+        eventAction: ForegroundTaskEventAction.repeat(requestServerInterval*1000),
+        allowWakeLock: true,
+        allowWifiLock: true,
+        autoRunOnBoot: false,
+        autoRunOnMyPackageReplaced: true,
+      ),
+    );
+  }
+
+  Future<void> _startBackgroundService() async {
+    if (kIsWeb) {
+      return;
+    }
+    if (await FlutterForegroundTask.isRunningService) {
+      return;
+    }
+
+    final notificationPermission = await FlutterForegroundTask.checkNotificationPermission();
+
+    if (notificationPermission != NotificationPermission.granted) {
+      await FlutterForegroundTask.requestNotificationPermission();
+    }
+
+    if (Platform.isAndroid) {
+      if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
+        await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+      }
+    }
+
+    await FlutterForegroundTask.startService(
+      serviceId: 1001,
+      serviceTypes: [
+        ForegroundServiceTypes.connectedDevice,
+      ],
+      notificationTitle: 'LCD-Patch',
+      notificationText: 'LCD-Connection active',
+      callback: startCallback,
+    );
+  }
+
+  void _onBackgroundData(Object data) {
+    if (!mounted) {
+      return;
+    }
+    if (data is! Map) {
+      return;
+    }
+
+    switch (data['type']) {
+      case 'backgroundReady':
+        setState(() {
+          isBackgroundReady = true;
+        });
+        break;
+
+      case 'bleStatus':
+        setState(() {
+          isBLEConnected = data['connected'];
+        });
+        break;
+
+      case 'requestSent':
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("${data["queueCount"]} Requests in Queue"),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+        break;
+
+      case 'uploadResponse':
+        _uploadNotification(data['queueCount']);
+        break;
+
+      case 'error':
+        debugPrint('Background Error: ${data['message']}');
+        break;
+    }
+  }
+
+  void _uploadNotification(int queueCount) async {
+      double waitingTime = (queueCount * requestServerInterval) / 60;
+      String waitingTimeText = waitingTime.toStringAsFixed(1);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("$queueCount Requests in Queue ($waitingTimeText minutes)"),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    }
 
 
   @override
@@ -331,38 +417,45 @@ class _MyHomePageState extends State<MyHomePage> {
                     mainAxisAlignment: MainAxisAlignment.start,
                     children: [
                       if (isAdmin)
-                      ValueListenableBuilder<bool>(
-                        valueListenable: ble.isConnected,
-                        builder: (context, connected, child) {
-                          return IconButton(
-                            icon: const Icon(Icons.bluetooth),
-                            color: connected ? Colors.green : Colors.red,
-                            tooltip: 'Bluetooth',
-                            onPressed: () {
-                              if (!connected) {
-                                ble.init();
-                              }
-                            },
-                          );
+                      IconButton(
+                        icon: const Icon(Icons.bluetooth),
+                        color: isBLEConnected ? Colors.green : Colors.red,
+                        tooltip: 'Bluetooth',
+                        onPressed: !isBackgroundReady ? null
+                        : () async {
+                          if (kIsWeb) {
+                            return;
+                          }
+
+                          FlutterForegroundTask.sendDataToTask({
+                            'command': BackgroundCommands.initBLE,
+                          });
                         },
                       ),
+
 
                       if (isAdmin)
                       IconButton(
                         icon: const Icon(Icons.wifi),
                         color: useServer ? Colors.green : const ui.Color.fromARGB(255, 28, 29, 29),
                         tooltip: 'Server-Connection',
-                        onPressed: () {
+                        onPressed: !isBackgroundReady ? null
+                        : () {
                           setState(() {
                             if (useServer) {
-                              stopRequestServerTimer();
                               useServer = false;
                             } 
                             else {
-                              startRequestServerTimer(requestServerInterval);
                               useServer = true;
                             }
                           }); 
+
+                          if (!kIsWeb) {
+                            FlutterForegroundTask.sendDataToTask({
+                              'command': BackgroundCommands.setServerMode,
+                              'value': useServer,
+                            });
+                          }
                         }
                       )
                     ],
